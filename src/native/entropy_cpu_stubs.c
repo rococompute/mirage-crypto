@@ -40,7 +40,24 @@
    The executable test/test_entropy.ml tests parts of the requirements by
    calling mc_cycle_counter 10 times and comparing the output to the previous
    output.
+
+   On some platforms (arm64 cntvct_el0, which ticks at 24 MHz on Apple
+   Silicon, and the arm32 fallbacks) the timer ticks slower than the rate at
+   which OCaml can call this function, so two successive reads may observe the
+   same value (https://github.com/mirage/mirage-crypto/issues/216). There, a
+   per-call sequence number is added: the timer still provides whatever
+   entropy it has, and the sequence number guarantees successive outputs
+   differ. This does not make the value any less predictable, it only stops
+   the entropy self-test (and Fortuna's initialisation) from failing.
+   Adapted from https://github.com/mirage/mirage-crypto/pull/283.
 */
+
+#if defined (__arm__) || defined (__aarch64__)
+#include <stdint.h>
+static uint32_t mc_cycle_counter_calls = 0;
+#define mc_sequence() \
+  __atomic_fetch_add(&mc_cycle_counter_calls, 1, __ATOMIC_RELAXED)
+#endif
 
 #if defined (_MSC_VER)
 #include <immintrin.h>
@@ -182,7 +199,7 @@ CAMLprim value mc_cycle_counter (value __unused(unit)) {
 #if defined (__i386__) || defined (__x86_64__) || defined (_MSC_VER)
   return Val_long (__rdtsc ());
 #elif defined (__arm__) || defined (__aarch64__)
-  return Val_long (read_virtual_count ());
+  return Val_long (read_virtual_count () + mc_sequence ());
 #elif defined(__powerpc64__) || defined(__POWERPC__)
   return Val_long (read_cycle_counter ());
 #elif defined(__riscv) && (64 == __riscv_xlen)
