@@ -32,4 +32,8 @@ val initialize :
     [generator] and sets up periodic entropy feeding for that rng. This
     function fails ([Lwt.fail]) if it is called a second time. The argument
     [~sleep] is measured in ns, and used as sleep between cpu assisted random
-    number collection. It defaults to one second. *)
+    number collection. It defaults to one second.
+
+    On a Solo5 tender that offers host random bytes ([solo5_random]), the
+    seed starts with 32 host bytes, and every [~sleep] each pool is fed 32
+    more, as entropy source [solo5-host]. *)
