@@ -71,28 +71,33 @@ let host_seed id data =
   Bytes.set_uint8 hdr 1 (String.length data);
   Bytes.unsafe_to_string hdr ^ data
 
-(* Feeds host_chunk host bytes into each pool, with one hypercall for all of
-   them. *)
+(* Feeds host_chunk host bytes into each pool. Fortuna's 32 pools fit in one
+   hypercall; generators with more than 128 pools need multiple calls. *)
 let feed_host g source =
   let pools = pools g in
   match host_random (pools * host_chunk) with
-  | None -> ()
+  | None -> false
   | Some data ->
     let i = ref 0 in
     Entropy.feed_pools g source (fun () ->
         let chunk = String.sub data (!i * host_chunk) host_chunk in
         incr i;
-        Ok chunk)
+        Ok chunk);
+    true
 
 let host_task g source delta =
   let open Lwt.Infix in
   Lwt.async (fun () ->
-      let rec one () =
-        feed_host g source;
+      let rec one failed =
+        let success = feed_host g source in
+        if not success && not failed then
+          Log.warn (fun m -> m "solo5-host entropy unavailable; retrying")
+        else if success && failed then
+          Log.info (fun m -> m "solo5-host entropy recovered");
         Mirage_sleep.ns delta >>=
-        one
+        fun () -> one (not success)
       in
-      one ())
+      one false)
 
 let bootstrap_functions () =
   Entropy.[ bootstrap ; bootstrap ; whirlwind_bootstrap ; bootstrap ]
@@ -112,23 +117,24 @@ let initialize (type a) ?g ?(sleep = Duration.of_sec 1) (rng : a generator) =
        No_default_generator -> ());
     running := true;
     let host = host_random host_chunk in
+    let host_source = Option.map (fun _ -> Entropy.register_source "solo5-host") host in
     let seed =
       let rest = List.mapi (fun i f -> f i) (bootstrap_functions ()) in
       let host =
-        match host with
-        | None -> []
-        | Some data -> [ host_seed (List.length rest) data ]
+        match host, host_source with
+        | Some data, Some source -> [ host_seed (Entropy.id source) data ]
+        | _ -> []
       in
       String.concat "" (host @ rest)
     in
     let rng = create ?g ~seed ~time:Mirage_mtime.elapsed_ns rng in
     set_default_generator rng;
-    if Option.is_some host then begin
-      let source = Entropy.register_source "solo5-host" in
+    (match host_source with
+    | Some source ->
       host_task (Some rng) source sleep
-    end else
+    | None ->
       Log.info (fun m -> m "no host entropy (solo5_random unavailable), \
-                            seeding from CPU RNG or whirlwind only");
+                            seeding from CPU RNG or whirlwind only"));
     rdrand_task sleep;
     Mirage_runtime.at_enter_iter (Entropy.timer_accumulator None);
     Lwt.return_unit

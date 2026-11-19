@@ -36,4 +36,6 @@ val initialize :
 
     On a Solo5 tender that offers host random bytes ([solo5_random]), the
     seed starts with 32 host bytes, and every [~sleep] each pool is fed 32
-    more, as entropy source [solo5-host]. *)
+    more, as entropy source [solo5-host]. Later host failures are retried; a
+    warning marks the start of a failure period and an info message marks
+    recovery. A registered source name alone does not indicate source health. *)
